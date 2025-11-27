@@ -1,0 +1,16 @@
+torch
+torchvision
+torchaudio
+torchmetrics
+numpy
+scipy
+tqdm
+matplotlib
+pandas
+wandb
+comet_ml
+hydra-core
+soundfile
+black
+isort
+pre-commit
