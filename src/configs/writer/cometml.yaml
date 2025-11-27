@@ -1,0 +1,13 @@
+_target_: src.logger.CometMLWriter
+project_name: "pytorch_template"
+workspace: null
+run_name: "testing"
+mode: "online"
+loss_names:
+    - "loss_g"
+    - "loss_d"
+    - "loss_adv"
+    - "loss_fm"
+    - "loss_mel"
+log_checkpoints: False # set to True if you want to log save_dir with checkpoints to W&B
+id_length: 32 # length of the run_id
