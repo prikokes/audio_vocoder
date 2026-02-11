@@ -36,7 +36,7 @@ def main(config):
     dataloaders, batch_transforms = get_dataloaders(config, device)
 
     model = instantiate(config.model).to(device)
-    # logger.info(model)
+    logger.info(model)
 
     loss_function = instantiate(config.loss_function).to(device)
     metrics = instantiate(config.metrics)

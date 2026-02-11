@@ -1,2 +1,2 @@
 from src.metrics.example import ExampleMetric
-from src.metrics.audio_metrics import MelSpectrogramDistance, STFTDistance, PESQScore, AudioMetrics, GANMetrics
+from src.metrics.audio_metrics import MelDistance, PESQ, STOI, LSD

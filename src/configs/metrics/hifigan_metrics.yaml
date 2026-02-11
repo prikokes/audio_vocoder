@@ -1,7 +1,5 @@
-train: []
-
-inference:
-  - _target_: src.metrics.MelSpectrogramDistance
+train:
+  - _target_: src.metrics.MelDistance
     name: "MelDistance"
     sample_rate: 22050
     n_fft: 1024
@@ -11,13 +9,33 @@ inference:
     f_min: 0.0
     f_max: 8000.0
 
-#  - _target_: src.metrics.STFTDistance
-#    name: "STFTLoss"
-#    fft_sizes: [512, 1024, 2048]
-#    hop_sizes: [128, 256, 512]
-#    win_sizes: [512, 1024, 2048]
-#
-#  - _target_: src.metrics.PESQScore
-#    name: "PESQ"
-#    sample_rate: 22050
-#    mode: "wb"
+  - _target_: src.metrics.LSD
+    name: "LSD"
+    n_fft: 1024
+    hop_length: 256
+    win_length: 1024
+
+inference:
+  - _target_: src.metrics.MelDistance
+    name: "MelDistance"
+    sample_rate: 22050
+    n_fft: 1024
+    hop_length: 256
+    win_length: 1024
+    n_mels: 80
+    f_min: 0.0
+    f_max: 8000.0
+
+  - _target_: src.metrics.LSD
+    name: "LSD"
+    n_fft: 1024
+    hop_length: 256
+    win_length: 1024
+
+  - _target_: src.metrics.PESQ
+    name: "PESQ"
+    sample_rate: 22050
+
+  - _target_: src.metrics.STOI
+    name: "STOI"
+    sample_rate: 22050

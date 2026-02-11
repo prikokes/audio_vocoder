@@ -2,11 +2,11 @@ torch
 torchvision
 torchaudio
 torchmetrics
-numpy
+numpy==2.3.0
 scipy
 tqdm
 matplotlib
-pandas=2.3.3
+pandas==2.3.3
 wandb
 comet_ml
 hydra-core
@@ -14,3 +14,6 @@ soundfile
 black
 isort
 pre-commit
+pystoi
+pesq
+librosa

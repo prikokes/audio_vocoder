@@ -64,18 +64,20 @@ class HiFiGANTrainer(BaseTrainer):
         if self.is_train:
             metric_funcs = self.metrics["train"]
 
-        batch = self.move_batch_to_device(batch)
-        batch = self.transform_batch(batch)
-
         mel = batch["mel"]
         audio_real = batch["audio"]
 
-        d_losses = self._train_discriminator(mel, audio_real)
-        batch.update(d_losses)
-
         if self.is_train:
+            d_losses = self._train_discriminator(mel, audio_real)
+            batch.update(d_losses)
+
             g_losses = self._train_generator(mel, audio_real)
             batch.update(g_losses)
+
+            # Генерируем audio_fake для метрик
+            with torch.no_grad():
+                audio_fake = self.model.generator(mel)
+            batch["audio_fake"] = audio_fake
 
             if self.lr_scheduler_g is not None:
                 self.lr_scheduler_g.step()
@@ -88,9 +90,6 @@ class HiFiGANTrainer(BaseTrainer):
 
         batch["audio_real"] = audio_real
 
-        if self.is_train and self.lr_scheduler_d is not None:
-            self.lr_scheduler_d.step()
-
         for loss_name in self.config.writer.loss_names:
             if loss_name in batch and batch[loss_name] is not None:
                 loss_value = batch[loss_name]
@@ -99,20 +98,10 @@ class HiFiGANTrainer(BaseTrainer):
 
         for met in metric_funcs:
             try:
-                audio_real = batch["audio_real"]
-                audio_fake = batch["audio_fake"]
-
-                metric_result = met(audio_real, audio_fake)
-
-                if isinstance(metric_result, dict):
-                    for metric_name, metric_value in metric_result.items():
-                        full_metric_name = f"{met.name}_{metric_name}" if met.name else metric_name
-                        metrics.update(full_metric_name, metric_value)
-                else:
-                    metrics.update(met.name, metric_result)
+                metric_value = met(batch["audio_real"], batch["audio_fake"])
+                metrics.update(met.name, metric_value)
             except Exception as e:
                 self.logger.warning(f"Could not compute metric {met.name}: {e}")
-                continue
 
         if 'loss' not in batch:
             if 'loss_d' in batch:

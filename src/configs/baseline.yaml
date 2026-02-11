@@ -42,7 +42,7 @@ trainer:
   resume_from: null
   device: mps
   override: True
-  monitor: "min val_loss"
+  monitor: "min val_MelDistance"
   save_period: 50
   early_stop: 100
   save_dir: "saved_hifigan"
@@ -51,4 +51,4 @@ trainer:
   g_steps: 1
   max_grad_norm_g: 1.0
   max_grad_norm_d: 1.0
-  segment_size: 8192
+  segment_size: 16384

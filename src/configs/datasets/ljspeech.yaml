@@ -2,6 +2,7 @@ train:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
   root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
+  segment_size: 8192
   limit: 8
   offset: 0
   shuffle_index: true
@@ -20,6 +21,7 @@ val:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
   root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
+  segment_size: 16384
   limit: 8
   offset: 0
   shuffle_index: false
@@ -30,6 +32,7 @@ test:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
   root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
+  segment_size: 16384
   limit: 8
   offset: 0
   shuffle_index: false
