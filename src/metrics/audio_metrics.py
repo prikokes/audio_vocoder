@@ -25,22 +25,30 @@ class MelSpectrogramDistance:
             sample_rate=sample_rate
         )
 
-    def __call__(self, audio_real, audio_fake):
-        # Обрабатываем батч: вычисляем метрики для каждого примера и усредняем
+    def __call__(self, audio_real, audio_fake_1):
+        audio_fake = audio_fake_1['audio_generated']
+
+        print(f"Audio real: {audio_real.shape}, Audio fake: {audio_fake.shape}")
         batch_size = audio_real.shape[0]
         total_l1 = 0.0
         total_l2 = 0.0
 
         for i in range(batch_size):
-            audio_real_i = audio_real[i:i + 1]  # сохраняем размерность батча
-            audio_fake_i = audio_fake[i:i + 1]
+            audio_real_i = audio_real[i:i + 1, ...]
+            audio_fake_i = audio_fake[i:i + 1, ...]
+
+            print(f"real i: {audio_real_i.shape}, fake i: {audio_fake_i.shape}")
 
             min_length = min(audio_real_i.shape[-1], audio_fake_i.shape[-1])
             audio_real_i = audio_real_i[..., :min_length]
             audio_fake_i = audio_fake_i[..., :min_length]
 
+            print(f"real i 2: {audio_real_i.shape}, fake i 2: {audio_fake_i.shape}")
+
             spec_real = self._compute_mel_spectrogram(audio_real_i)
             spec_fake = self._compute_mel_spectrogram(audio_fake_i)
+
+            print(f"spec real i: {spec_real.shape}, spec fake i: {spec_fake.shape}")
 
             total_l1 += F.l1_loss(spec_fake, spec_real).item()
             total_l2 += F.mse_loss(spec_fake, spec_real).item()

@@ -1,11 +1,5 @@
 instance_transforms:
   train:
-    audio:
-      _target_: src.transforms.audio_transforms.ComposeTransforms
-      transforms:
-        - _target_: src.transforms.audio_transforms.AudioSegment
-          segment_size: ${trainer.segment_size}
-        - _target_: src.transforms.audio_transforms.AudioNormalize
     mel:
       _target_: src.transforms.audio_transforms.AudioToMelSpectrogram
       sample_rate: 22050
@@ -17,12 +11,6 @@ instance_transforms:
       f_max: 8000.0
 
   inference:
-    audio:
-      _target_: src.transforms.audio_transforms.ComposeTransforms
-      transforms:
-        - _target_: src.transforms.audio_transforms.AudioSegment
-          segment_size: ${trainer.segment_size}
-        - _target_: src.transforms.audio_transforms.AudioNormalize
     mel:
       _target_: src.transforms.audio_transforms.AudioToMelSpectrogram
       sample_rate: 22050

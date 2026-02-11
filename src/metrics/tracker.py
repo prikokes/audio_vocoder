@@ -17,6 +17,7 @@ class MetricTracker:
         """
         self.writer = writer
         self._data = pd.DataFrame(index=keys, columns=["total", "counts", "average"])
+        self._data.flags.writeable = True
         self.reset()
 
     def reset(self):

@@ -64,24 +64,29 @@ class HiFiGANTrainer(BaseTrainer):
         if self.is_train:
             metric_funcs = self.metrics["train"]
 
+        batch = self.move_batch_to_device(batch)
+        batch = self.transform_batch(batch)
+
         mel = batch["mel"]
-        audio = batch["audio"]
+        audio_real = batch["audio"]
 
-        with torch.no_grad():
-            audio_fake = self.model(mel)
-        batch["audio_fake"] = audio_fake
-
-        batch["audio_real"] = audio
-
-        d_losses = self._train_discriminator(mel, audio)
+        d_losses = self._train_discriminator(mel, audio_real)
         batch.update(d_losses)
 
-        if self.is_train and (self._last_batch_idx % self.d_steps == 0):
-            g_losses = self._train_generator(mel, audio)
+        if self.is_train:
+            g_losses = self._train_generator(mel, audio_real)
             batch.update(g_losses)
 
             if self.lr_scheduler_g is not None:
                 self.lr_scheduler_g.step()
+            if self.lr_scheduler_d is not None:
+                self.lr_scheduler_d.step()
+        else:
+            with torch.no_grad():
+                audio_fake = self.model.generator(mel)
+            batch["audio_fake"] = audio_fake
+
+        batch["audio_real"] = audio_real
 
         if self.is_train and self.lr_scheduler_d is not None:
             self.lr_scheduler_d.step()
@@ -117,18 +122,66 @@ class HiFiGANTrainer(BaseTrainer):
 
         return batch
 
+    def _train_generator(self, mel, audio_real):
+        self.optimizer_g.zero_grad()
+
+        audio_fake = self.model.generator(mel)
+
+        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
+        audio_real_matched = audio_real[..., :min_len]
+        audio_fake_matched = audio_fake[..., :min_len]
+
+        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
+            audio_real_matched, audio_fake_matched
+        )
+        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
+            audio_real_matched, audio_fake_matched
+        )
+
+        losses = self.criterion(
+            audio_real=audio_real_matched,
+            audio_fake=audio_fake_matched,
+            mpd_real=mpd_real,
+            mpd_fake=mpd_fake,
+            msd_real=msd_real,
+            msd_fake=msd_fake,
+            mpd_real_fmaps=mpd_real_fmaps,
+            mpd_fake_fmaps=mpd_fake_fmaps,
+            msd_real_fmaps=msd_real_fmaps,
+            msd_fake_fmaps=msd_fake_fmaps,
+            model=self.model,
+            optimizer_idx=0
+        )
+
+        if self.is_train:
+            losses["loss_g"].backward()
+            self._clip_grad_norm_g()
+            self.optimizer_g.step()
+
+        losses["audio_fake"] = audio_fake.detach()
+
+        return losses
+
     def _train_discriminator(self, mel, audio_real):
         self.optimizer_d.zero_grad()
 
         with torch.no_grad():
             audio_fake = self.model.generator(mel)
 
-        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(audio_real, audio_fake)
-        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(audio_real, audio_fake)
+        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
+        audio_real_matched = audio_real[..., :min_len]
+        audio_fake_matched = audio_fake[..., :min_len]
+
+        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
+            audio_real_matched, audio_fake_matched
+        )
+        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
+            audio_real_matched, audio_fake_matched
+        )
 
         losses = self.criterion(
-            audio_real=audio_real,
-            audio_fake=audio_fake,
+            audio_real=audio_real_matched,
+            audio_fake=audio_fake_matched,
             mpd_real=mpd_real,
             mpd_fake=mpd_fake,
             msd_real=msd_real,
@@ -145,36 +198,6 @@ class HiFiGANTrainer(BaseTrainer):
             losses["loss_d"].backward()
             self._clip_grad_norm_d()
             self.optimizer_d.step()
-
-        return losses
-
-    def _train_generator(self, mel, audio_real):
-        self.optimizer_g.zero_grad()
-
-        audio_fake = self.model.generator(mel)
-
-        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(audio_real, audio_fake)
-        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(audio_real, audio_fake)
-
-        losses = self.criterion(
-            audio_real=audio_real,
-            audio_fake=audio_fake,
-            mpd_real=mpd_real,
-            mpd_fake=mpd_fake,
-            msd_real=msd_real,
-            msd_fake=msd_fake,
-            mpd_real_fmaps=mpd_real_fmaps,
-            mpd_fake_fmaps=mpd_fake_fmaps,
-            msd_real_fmaps=msd_real_fmaps,
-            msd_fake_fmaps=msd_fake_fmaps,
-            model=self.model,
-            optimizer_idx=0  # Generator
-        )
-
-        if self.is_train:
-            losses["loss_g"].backward()
-            self._clip_grad_norm_g()
-            self.optimizer_g.step()
 
         return losses
 

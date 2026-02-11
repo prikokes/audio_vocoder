@@ -6,7 +6,7 @@ numpy
 scipy
 tqdm
 matplotlib
-pandas
+pandas=2.3.3
 wandb
 comet_ml
 hydra-core

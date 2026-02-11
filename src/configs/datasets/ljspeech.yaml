@@ -1,17 +1,11 @@
 train:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
-  root_dir: "data/LJSpeech-1.1/LJSpeech-1.1"
+  root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
-  limit: 12000
+  limit: 8
   offset: 0
   shuffle_index: true
   instance_transforms:
-    audio:
-      _target_: src.transforms.ComposeTransforms
-      transforms:
-        - _target_: src.transforms.AudioNormalize
-        - _target_: src.transforms.AudioSegment
-          segment_size: 8192
     mel:
       _target_: src.transforms.AudioToMelSpectrogram
       sample_rate: 22050
@@ -24,20 +18,20 @@ train:
 
 val:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
-  root_dir: "data/LJSpeech-1.1/LJSpeech-1.1"
+  root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
-  limit: 500
-  offset: 12000
+  limit: 8
+  offset: 0
   shuffle_index: false
   instance_transforms: ${transforms.instance_transforms.inference}
   split_symbol: "|"
 
 test:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
-  root_dir: "data/LJSpeech-1.1/LJSpeech-1.1"
+  root_dir: "/Users/prikokes/PycharmProjects/audio_vocoder/datasets/LJSpeech-1.1"
   metadata_file: "metadata.csv"
-  limit: 500
-  offset: 12500
+  limit: 8
+  offset: 0
   shuffle_index: false
   instance_transforms: ${transforms.instance_transforms.inference}
   split_symbol: "|"

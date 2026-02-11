@@ -11,13 +11,13 @@ inference:
     f_min: 0.0
     f_max: 8000.0
 
-  - _target_: src.metrics.STFTDistance
-    name: "STFTLoss"
-    fft_sizes: [512, 1024, 2048]
-    hop_sizes: [128, 256, 512]
-    win_sizes: [512, 1024, 2048]
-
-  - _target_: src.metrics.PESQScore
-    name: "PESQ"
-    sample_rate: 22050
-    mode: "wb"
+#  - _target_: src.metrics.STFTDistance
+#    name: "STFTLoss"
+#    fft_sizes: [512, 1024, 2048]
+#    hop_sizes: [128, 256, 512]
+#    win_sizes: [512, 1024, 2048]
+#
+#  - _target_: src.metrics.PESQScore
+#    name: "PESQ"
+#    sample_rate: 22050
+#    mode: "wb"

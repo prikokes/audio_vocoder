@@ -10,6 +10,8 @@ import pandas as pd
 import sys
 import soundfile
 
+from src.transforms.audio_transforms import AudioToMelSpectrogram
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,12 @@ class LJSpeechDataset(Dataset):
     def __init__(
             self,
             root_dir: str,
+            segment_size: int = 8192,
+            hop_length: int = 256,
+            sample_rate: int = 22050,
+            n_mels: int = 80,
+            n_fft: int = 1024,
+            f_max: float = 8000.0,
             metadata_file: str = "metadata.csv",
             limit: int = None,
             offset: int = 0,
@@ -26,6 +34,17 @@ class LJSpeechDataset(Dataset):
             split_symbol: str = "|",
             name: str = "lj_speech"
     ):
+        self.segment_size = segment_size
+        self.hop_length = hop_length
+
+        self.mel_transform = AudioToMelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=n_fft,
+            n_mels=n_mels,
+            f_max=f_max
+        )
         self.root_dir = root_dir
         self.wavs_dir = os.path.join(root_dir, "wavs")
         self.name = name
@@ -39,55 +58,45 @@ class LJSpeechDataset(Dataset):
         index = self._shuffle_and_limit_index(index, limit, shuffle_index)
         self._index: List[dict] = index
 
+        print(len(self._index))
+
         self.instance_transforms = instance_transforms
 
     def __getitem__(self, idx):
         data_dict = self._index[idx]
         audio_path = data_dict["audio_path"]
-        text = data_dict["text"]
 
         waveform, sample_rate = self.load_audio(audio_path)
 
         if waveform.dim() == 1:
             waveform = waveform.unsqueeze(0)
 
+        if self.segment_size is not None:
+            waveform = self._segment_audio(waveform)
+
+        mel = self.mel_transform(waveform)
+
+        if mel.dim() == 3 and mel.shape[0] == 1:
+            mel = mel.squeeze(0)  # [n_mels, T]
+
         data = {
             "audio": waveform,
-            "text": text,
+            "mel": mel,  # [n_mels, T]
             "audio_path": audio_path,
-            "sample_rate": sample_rate,
-            "mel": []
         }
 
-        for transform_name, transform in self.instance_transforms.items():
-            if callable(transform):
-                data[transform_name] = transform(data["audio"])
-
-        logger.info("Some text.")
-        logger.info(data.keys())
-        sys.stdout.flush()
-
-             # if "audio" in data:
-                # data["mel"] = self.mel_transform(data["audio"])
-                # data["mel_input"] = data["mel"]
-
-        # except Exception as e:
-        #     logger.error(f"Error loading sample {idx}: {e}")
-        #     dummy_audio = torch.zeros(1, 16000)
-        #
-        #     data = {
-        #         "audio": dummy_audio,
-        #         "text": "",
-        #         "audio_path": "",
-        #         "sample_rate": 22050,
-        #         "mel": torch.zeros(80, 64),
-        #         "mel_input": torch.zeros(80, 64)
-        #     }
-        #
-        # logger.info("Some text.")
-        # logger.info(data.keys())
-
         return data
+
+    def _segment_audio(self, audio):
+        segment_size = (self.segment_size // self.hop_length) * self.hop_length
+
+        if audio.shape[-1] >= segment_size:
+            max_start = audio.shape[-1] - segment_size
+            start = random.randint(0, max_start)
+            return audio[..., start:start + segment_size]
+        else:
+            pad_size = segment_size - audio.shape[-1]
+            return torch.nn.functional.pad(audio, (0, pad_size), mode='constant', value=0)
 
     def __len__(self):
         return len(self._index)
@@ -113,7 +122,6 @@ class LJSpeechDataset(Dataset):
             )
 
             for _, row in metadata_df.iterrows():
-                # Проверяем, что текст не NaN и конвертируем в строку
                 normalized_text = row["normalized_text"]
                 raw_text = row["text"]
 
@@ -121,7 +129,6 @@ class LJSpeechDataset(Dataset):
                     logger.warning(f"Skipping row with missing text: {row['id']}")
                     continue
 
-                # Конвертируем в строку на всякий случай
                 normalized_text = str(normalized_text).strip()
                 raw_text = str(raw_text).strip()
 

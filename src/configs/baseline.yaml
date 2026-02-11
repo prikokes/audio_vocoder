@@ -37,10 +37,10 @@ trainer:
   _target_: src.trainer.HiFiGANTrainer
   log_step: 100
   n_epochs: 1000
-  epoch_len: 500
+  epoch_len: 1
   device_tensors: ["mel", "audio"]
   resume_from: null
-  device: cuda
+  device: mps
   override: True
   monitor: "min val_loss"
   save_period: 50
