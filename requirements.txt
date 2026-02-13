@@ -1,9 +1,9 @@
-torch
-torchvision
-torchaudio
-torchmetrics
+torch==2.10.0
+torchvision==0.25.0
+torchaudio==2.10.0
+torchmetrics==1.8.2
 numpy==2.3.0
-scipy
+scipy==1.17.0
 tqdm
 matplotlib
 pandas==2.3.3
@@ -17,3 +17,4 @@ pre-commit
 pystoi
 pesq
 librosa
+
