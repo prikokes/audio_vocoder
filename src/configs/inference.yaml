@@ -1,13 +1,16 @@
 defaults:
-  - model: baseline
-  - metrics: example
-  - datasets: example_eval # we do not want to run inference on training data
-  - dataloader: example
-  - transforms: example
+  - model: hifigan
+  - metrics: hifigan_metrics
+  - datasets: ljspeech
+  - dataloader: hifigan_dataloader
+  - transforms: hifigan_transforms
   - _self_
+
 inferencer:
-  device_tensors: ["data_object", "labels"] # which tensors should be on device (ex. GPU)
-  device: auto # device name or "auto"
-  save_path: "example" # any name here, can be a dataset name
+  device_tensors: ["mel", "audio"]
+  device: cuda
+  save_path: "hifigan_inference"
   seed: 1
-  from_pretrained: "saved/model_best.pth" # path to the pretrained model
+  from_pretrained: "saved_hifigan/HiFiGAN-Full data/model_best.pth"
+  sample_rate: 22050
+  max_duration: 4.0

@@ -1,6 +1,7 @@
 from abc import abstractmethod
 
 import torch
+import numpy as np
 from numpy import inf
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
@@ -74,18 +75,56 @@ class HiFiGANTrainer(BaseTrainer):
             g_losses = self._train_generator(mel, audio_real)
             batch.update(g_losses)
 
-            # Генерируем audio_fake для метрик
             with torch.no_grad():
                 audio_fake = self.model.generator(mel)
             batch["audio_fake"] = audio_fake
-
-            if self.lr_scheduler_g is not None:
-                self.lr_scheduler_g.step()
-            if self.lr_scheduler_d is not None:
-                self.lr_scheduler_d.step()
         else:
             with torch.no_grad():
                 audio_fake = self.model.generator(mel)
+
+                min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
+                audio_real_matched = audio_real[..., :min_len]
+                audio_fake_matched = audio_fake[..., :min_len]
+
+                mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
+                    audio_real_matched, audio_fake_matched
+                )
+                msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
+                    audio_real_matched, audio_fake_matched
+                )
+
+                g_losses = self.criterion(
+                    audio_real=audio_real_matched,
+                    audio_fake=audio_fake_matched,
+                    mpd_real=mpd_real,
+                    mpd_fake=mpd_fake,
+                    msd_real=msd_real,
+                    msd_fake=msd_fake,
+                    mpd_real_fmaps=mpd_real_fmaps,
+                    mpd_fake_fmaps=mpd_fake_fmaps,
+                    msd_real_fmaps=msd_real_fmaps,
+                    msd_fake_fmaps=msd_fake_fmaps,
+                    model=self.model,
+                    optimizer_idx=0
+                )
+                batch.update(g_losses)
+
+                d_losses = self.criterion(
+                    audio_real=audio_real_matched,
+                    audio_fake=audio_fake_matched,
+                    mpd_real=mpd_real,
+                    mpd_fake=mpd_fake,
+                    msd_real=msd_real,
+                    msd_fake=msd_fake,
+                    mpd_real_fmaps=mpd_real_fmaps,
+                    mpd_fake_fmaps=mpd_fake_fmaps,
+                    msd_real_fmaps=msd_real_fmaps,
+                    msd_fake_fmaps=msd_fake_fmaps,
+                    model=self.model,
+                    optimizer_idx=1
+                )
+                batch.update(d_losses)
+
             batch["audio_fake"] = audio_fake
 
         batch["audio_real"] = audio_real
@@ -104,12 +143,108 @@ class HiFiGANTrainer(BaseTrainer):
                 self.logger.warning(f"Could not compute metric {met.name}: {e}")
 
         if 'loss' not in batch:
-            if 'loss_d' in batch:
-                batch['loss'] = batch['loss_d']
-            elif 'loss_g' in batch:
+            if 'loss_g' in batch:
                 batch['loss'] = batch['loss_g']
+            elif 'loss_d' in batch:
+                batch['loss'] = batch['loss_d']
 
         return batch
+    
+    def _log_audio_samples(self, batch, mode):
+        import traceback
+        import numpy as np
+
+        audio_real = batch.get("audio")
+        audio_fake = batch.get("audio_fake")
+
+        if audio_real is None or audio_fake is None:
+            return
+
+        try:
+            idx = 0
+            real = audio_real[idx].detach().cpu().numpy().squeeze()
+            fake = audio_fake[idx].detach().cpu().numpy().squeeze()
+            real = np.clip(real, -1.0, 1.0).astype(np.float32)
+            fake = np.clip(fake, -1.0, 1.0).astype(np.float32)
+
+            self.writer.add_audio(f"{mode}/audio_real", real, sample_rate=22050)
+            self.writer.add_audio(f"{mode}/audio_fake", fake, sample_rate=22050)
+            self.logger.info("Audio logged successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to log audio: {e}")
+            self.logger.warning(traceback.format_exc())
+
+        try:
+            mel = batch.get("mel")
+            if mel is not None:
+                mel_np = mel[0].detach().cpu().numpy()
+                self.writer.add_image(f"{mode}/mel_spectrogram", mel_np)
+                self.logger.info("Mel image logged successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to log mel: {e}")
+            self.logger.warning(traceback.format_exc())
+
+    def _train_epoch(self, epoch):
+        self.is_train = True
+        self.model.train()
+        self.train_metrics.reset()
+        self.writer.set_step((epoch - 1) * self.epoch_len)
+        self.writer.add_scalar("epoch", epoch)
+
+        last_batch = None
+
+        for batch_idx, batch in enumerate(
+            tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
+        ):
+            try:
+                batch = self.process_batch(
+                    batch,
+                    metrics=self.train_metrics,
+                )
+                last_batch = batch
+            except torch.cuda.OutOfMemoryError as e:
+                if self.skip_oom:
+                    self.logger.warning("OOM on batch. Skipping batch.")
+                    torch.cuda.empty_cache()
+                    continue
+                else:
+                    raise e
+
+            self.train_metrics.update("grad_norm", self._get_grad_norm())
+
+            if batch_idx + 1 >= self.epoch_len:
+                break
+
+        self.writer.set_step(epoch * self.epoch_len)
+        self.writer.add_scalar("learning_rate_g", self.lr_scheduler_g.get_last_lr()[0])
+        self.writer.add_scalar("learning_rate_d", self.lr_scheduler_d.get_last_lr()[0])
+        self._log_scalars(self.train_metrics)
+
+        if last_batch is not None:
+            self._log_audio_samples(last_batch, "train")
+
+        last_train_metrics = self.train_metrics.result()
+
+        self.logger.info(
+            "Train Epoch: {} | loss_g: {:.4f} | loss_d: {:.4f}".format(
+                epoch,
+                last_train_metrics.get("loss_g", 0.0),
+                last_train_metrics.get("loss_d", 0.0),
+            )
+        )
+
+        if self.lr_scheduler_g is not None:
+            self.lr_scheduler_g.step()
+        if self.lr_scheduler_d is not None:
+            self.lr_scheduler_d.step()
+
+        logs = last_train_metrics
+
+        for part, dataloader in self.evaluation_dataloaders.items():
+            val_logs = self._evaluation_epoch(epoch, part, dataloader)
+            logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
+
+        return logs
 
     def _train_generator(self, mel, audio_real):
         self.optimizer_g.zero_grad()
@@ -226,46 +361,8 @@ class HiFiGANTrainer(BaseTrainer):
 
         return g_norm + d_norm
 
-    def _train_epoch(self, epoch):
-        self._last_batch_idx = 0
-        return super()._train_epoch(epoch)
-
     def _log_batch(self, batch_idx, batch, mode="train"):
-        self._last_batch_idx = batch_idx
-
-        if mode == "train":
-            if batch_idx % self.log_step == 0:
-                self.writer.add_scalar("learning_rate_g", self.lr_scheduler_g.get_last_lr()[0])
-                self.writer.add_scalar("learning_rate_d", self.lr_scheduler_d.get_last_lr()[0])
-
-                if "loss_g" in batch:
-                    self.writer.add_scalar("loss_g", batch["loss_g"].item())
-                if "loss_d" in batch:
-                    self.writer.add_scalar("loss_d", batch["loss_d"].item())
-                if "loss_fm" in batch:
-                    self.writer.add_scalar("loss_fm", batch["loss_fm"].item())
-                if "loss_mel" in batch:
-                    self.writer.add_scalar("loss_mel", batch["loss_mel"].item())
-
-                if batch_idx % (self.log_step * 10) == 0 and "audio_fake" in batch:
-                    self._log_audio_samples(batch, mode)
-
-    def _log_audio_samples(self, batch, mode):
-        try:
-            audio_real = batch.get("audio")
-            audio_fake = batch.get("audio_fake")
-            mel = batch.get("mel")
-
-            if audio_real is not None and audio_fake is not None:
-                idx = 0
-                self.writer.add_audio(f"{mode}/audio_real", audio_real[idx], sample_rate=22050)
-                self.writer.add_audio(f"{mode}/audio_fake", audio_fake[idx], sample_rate=22050)
-
-            if mel is not None:
-                self.writer.add_image(f"{mode}/mel_spectrogram", mel[idx].cpu())
-
-        except Exception as e:
-            self.logger.warning(f"Failed to log audio samples: {e}")
+        pass
 
     def _save_checkpoint(self, epoch, save_best=False, only_best=False):
         arch = type(self.model).__name__
@@ -326,4 +423,3 @@ class HiFiGANTrainer(BaseTrainer):
             self.lr_scheduler_d.load_state_dict(checkpoint["lr_scheduler_d"])
 
         self.logger.info(f"Checkpoint loaded. Resume training from epoch {self.start_epoch}")
-

@@ -1,7 +1,7 @@
 _target_: src.logger.CometMLWriter
 project_name: "pytorch_template"
 workspace: null
-run_name: "testing"
+run_name: ???
 mode: "online"
 loss_names:
     - "loss_g"

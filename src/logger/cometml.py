@@ -186,10 +186,16 @@ class CometMLWriter:
 
         Args:
             audio_name (str): name of the audio to use in the tracker.
-            audio (Path | ndarray): audio in the CometML-friendly format.
+            audio (Path | ndarray | Tensor): audio in the CometML-friendly format.
             sample_rate (int): audio sample rate.
         """
-        audio = audio.detach().cpu().numpy().T
+        if hasattr(audio, 'detach'):
+            audio = audio.detach().cpu().numpy()
+
+        audio = np.squeeze(audio)
+
+        audio = np.clip(audio, -1.0, 1.0).astype(np.float32)
+
         self.exp.log_audio(
             file_name=self._object_name(audio_name),
             audio_data=audio,
