@@ -1,14 +1,9 @@
-from abc import abstractmethod
-
 import torch
 import numpy as np
-from numpy import inf
 from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
 
-from src.datasets.data_utils import inf_loop
 from src.metrics.tracker import MetricTracker
-from src.utils.io_utils import ROOT_PATH
 from src.trainer.base_trainer import BaseTrainer
 
 
@@ -31,7 +26,6 @@ class HiFiGANTrainer(BaseTrainer):
             skip_oom=True,
             batch_transforms=None,
     ):
-
         super().__init__(
             model=model,
             criterion=criterion,
@@ -57,6 +51,78 @@ class HiFiGANTrainer(BaseTrainer):
         self.g_steps = config.trainer.get("g_steps", 1)
         self.segment_size = config.trainer.get("segment_size", 8192)
 
+    def _run_model(self, mel, audio_real):
+        audio_fake = self.model.generator(mel)
+
+        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
+        audio_real = audio_real[..., :min_len]
+        audio_fake = audio_fake[..., :min_len]
+
+        disc_outputs = {}
+        for disc in self.model.discriminators:
+            disc_name = type(disc).__name__
+            d_real, d_fake, fmap_real, fmap_fake = disc(audio_real, audio_fake)
+            disc_outputs[f"{disc_name}_real"] = d_real
+            disc_outputs[f"{disc_name}_fake"] = d_fake
+            disc_outputs[f"{disc_name}_fmap_real"] = fmap_real
+            disc_outputs[f"{disc_name}_fmap_fake"] = fmap_fake
+
+        return {
+            "audio_real": audio_real,
+            "audio_fake": audio_fake,
+            **disc_outputs,
+        }
+
+    def _run_model_no_grad_gen(self, mel, audio_real):
+        with torch.no_grad():
+            audio_fake = self.model.generator(mel)
+
+        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
+        audio_real = audio_real[..., :min_len]
+        audio_fake = audio_fake[..., :min_len]
+
+        disc_outputs = {}
+        for disc in self.model.discriminators:
+            disc_name = type(disc).__name__
+            d_real, d_fake, fmap_real, fmap_fake = disc(audio_real, audio_fake)
+            disc_outputs[f"{disc_name}_real"] = d_real
+            disc_outputs[f"{disc_name}_fake"] = d_fake
+            disc_outputs[f"{disc_name}_fmap_real"] = fmap_real
+            disc_outputs[f"{disc_name}_fmap_fake"] = fmap_fake
+
+        return {
+            "audio_real": audio_real,
+            "audio_fake": audio_fake,
+            **disc_outputs,
+        }
+
+    def _train_generator(self, mel, audio_real):
+        self.optimizer_g.zero_grad()
+
+        model_output = self._run_model(mel, audio_real)
+        losses = self.criterion(model_output, optimizer_idx=0)
+
+        if self.is_train:
+            losses["loss_g"].backward()
+            self._clip_grad_norm_g()
+            self.optimizer_g.step()
+
+        losses["audio_fake"] = model_output["audio_fake"].detach()
+        return losses
+
+    def _train_discriminator(self, mel, audio_real):
+        self.optimizer_d.zero_grad()
+
+        model_output = self._run_model_no_grad_gen(mel, audio_real)
+        losses = self.criterion(model_output, optimizer_idx=1)
+
+        if self.is_train:
+            losses["loss_d"].backward()
+            self._clip_grad_norm_d()
+            self.optimizer_d.step()
+
+        return losses
+
     def process_batch(self, batch, metrics: MetricTracker):
         batch = self.move_batch_to_device(batch)
         batch = self.transform_batch(batch)
@@ -80,52 +146,15 @@ class HiFiGANTrainer(BaseTrainer):
             batch["audio_fake"] = audio_fake
         else:
             with torch.no_grad():
-                audio_fake = self.model.generator(mel)
+                model_output = self._run_model(mel, audio_real)
 
-                min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
-                audio_real_matched = audio_real[..., :min_len]
-                audio_fake_matched = audio_fake[..., :min_len]
-
-                mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
-                    audio_real_matched, audio_fake_matched
-                )
-                msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
-                    audio_real_matched, audio_fake_matched
-                )
-
-                g_losses = self.criterion(
-                    audio_real=audio_real_matched,
-                    audio_fake=audio_fake_matched,
-                    mpd_real=mpd_real,
-                    mpd_fake=mpd_fake,
-                    msd_real=msd_real,
-                    msd_fake=msd_fake,
-                    mpd_real_fmaps=mpd_real_fmaps,
-                    mpd_fake_fmaps=mpd_fake_fmaps,
-                    msd_real_fmaps=msd_real_fmaps,
-                    msd_fake_fmaps=msd_fake_fmaps,
-                    model=self.model,
-                    optimizer_idx=0
-                )
+                g_losses = self.criterion(model_output, optimizer_idx=0)
                 batch.update(g_losses)
 
-                d_losses = self.criterion(
-                    audio_real=audio_real_matched,
-                    audio_fake=audio_fake_matched,
-                    mpd_real=mpd_real,
-                    mpd_fake=mpd_fake,
-                    msd_real=msd_real,
-                    msd_fake=msd_fake,
-                    mpd_real_fmaps=mpd_real_fmaps,
-                    mpd_fake_fmaps=mpd_fake_fmaps,
-                    msd_real_fmaps=msd_real_fmaps,
-                    msd_fake_fmaps=msd_fake_fmaps,
-                    model=self.model,
-                    optimizer_idx=1
-                )
+                d_losses = self.criterion(model_output, optimizer_idx=1)
                 batch.update(d_losses)
 
-            batch["audio_fake"] = audio_fake
+            batch["audio_fake"] = model_output["audio_fake"]
 
         batch["audio_real"] = audio_real
 
@@ -149,10 +178,40 @@ class HiFiGANTrainer(BaseTrainer):
                 batch['loss'] = batch['loss_d']
 
         return batch
-    
+
+    def _clip_grad_norm_g(self):
+        max_norm = self.config["trainer"].get("max_grad_norm_g", None)
+        if max_norm is not None:
+            clip_grad_norm_(self.model.generator.parameters(), max_norm)
+
+    def _clip_grad_norm_d(self):
+        max_norm = self.config["trainer"].get("max_grad_norm_d", None)
+        if max_norm is not None:
+            d_params = []
+            for disc in self.model.discriminators:
+                d_params.extend(disc.parameters())
+            clip_grad_norm_(d_params, max_norm)
+
+    @torch.no_grad()
+    def _get_grad_norm(self, norm_type=2):
+        g_parameters = [p for p in self.model.generator.parameters() if p.grad is not None]
+        g_norm = torch.norm(
+            torch.stack([torch.norm(p.grad.detach(), norm_type) for p in g_parameters]),
+            norm_type,
+        ).item() if g_parameters else 0.0
+
+        d_parameters = []
+        for disc in self.model.discriminators:
+            d_parameters.extend([p for p in disc.parameters() if p.grad is not None])
+        d_norm = torch.norm(
+            torch.stack([torch.norm(p.grad.detach(), norm_type) for p in d_parameters]),
+            norm_type,
+        ).item() if d_parameters else 0.0
+
+        return g_norm + d_norm
+
     def _log_audio_samples(self, batch, mode):
         import traceback
-        import numpy as np
 
         audio_real = batch.get("audio")
         audio_fake = batch.get("audio_fake")
@@ -169,7 +228,6 @@ class HiFiGANTrainer(BaseTrainer):
 
             self.writer.add_audio(f"{mode}/audio_real", real, sample_rate=22050)
             self.writer.add_audio(f"{mode}/audio_fake", fake, sample_rate=22050)
-            self.logger.info("Audio logged successfully")
         except Exception as e:
             self.logger.warning(f"Failed to log audio: {e}")
             self.logger.warning(traceback.format_exc())
@@ -179,10 +237,12 @@ class HiFiGANTrainer(BaseTrainer):
             if mel is not None:
                 mel_np = mel[0].detach().cpu().numpy()
                 self.writer.add_image(f"{mode}/mel_spectrogram", mel_np)
-                self.logger.info("Mel image logged successfully")
         except Exception as e:
             self.logger.warning(f"Failed to log mel: {e}")
             self.logger.warning(traceback.format_exc())
+
+    def _log_batch(self, batch_idx, batch, mode="train"):
+        pass
 
     def _train_epoch(self, epoch):
         self.is_train = True
@@ -197,10 +257,7 @@ class HiFiGANTrainer(BaseTrainer):
             tqdm(self.train_dataloader, desc="train", total=self.epoch_len)
         ):
             try:
-                batch = self.process_batch(
-                    batch,
-                    metrics=self.train_metrics,
-                )
+                batch = self.process_batch(batch, metrics=self.train_metrics)
                 last_batch = batch
             except torch.cuda.OutOfMemoryError as e:
                 if self.skip_oom:
@@ -245,125 +302,7 @@ class HiFiGANTrainer(BaseTrainer):
             logs.update(**{f"{part}_{name}": value for name, value in val_logs.items()})
 
         return logs
-
-    def _train_generator(self, mel, audio_real):
-        self.optimizer_g.zero_grad()
-
-        audio_fake = self.model.generator(mel)
-
-        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
-        audio_real_matched = audio_real[..., :min_len]
-        audio_fake_matched = audio_fake[..., :min_len]
-
-        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
-            audio_real_matched, audio_fake_matched
-        )
-        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
-            audio_real_matched, audio_fake_matched
-        )
-
-        losses = self.criterion(
-            audio_real=audio_real_matched,
-            audio_fake=audio_fake_matched,
-            mpd_real=mpd_real,
-            mpd_fake=mpd_fake,
-            msd_real=msd_real,
-            msd_fake=msd_fake,
-            mpd_real_fmaps=mpd_real_fmaps,
-            mpd_fake_fmaps=mpd_fake_fmaps,
-            msd_real_fmaps=msd_real_fmaps,
-            msd_fake_fmaps=msd_fake_fmaps,
-            model=self.model,
-            optimizer_idx=0
-        )
-
-        if self.is_train:
-            losses["loss_g"].backward()
-            self._clip_grad_norm_g()
-            self.optimizer_g.step()
-
-        losses["audio_fake"] = audio_fake.detach()
-
-        return losses
-
-    def _train_discriminator(self, mel, audio_real):
-        self.optimizer_d.zero_grad()
-
-        with torch.no_grad():
-            audio_fake = self.model.generator(mel)
-
-        min_len = min(audio_real.shape[-1], audio_fake.shape[-1])
-        audio_real_matched = audio_real[..., :min_len]
-        audio_fake_matched = audio_fake[..., :min_len]
-
-        mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.model.mpd(
-            audio_real_matched, audio_fake_matched
-        )
-        msd_real, msd_fake, msd_real_fmaps, msd_fake_fmaps = self.model.msd(
-            audio_real_matched, audio_fake_matched
-        )
-
-        losses = self.criterion(
-            audio_real=audio_real_matched,
-            audio_fake=audio_fake_matched,
-            mpd_real=mpd_real,
-            mpd_fake=mpd_fake,
-            msd_real=msd_real,
-            msd_fake=msd_fake,
-            mpd_real_fmaps=mpd_real_fmaps,
-            msd_real_fmaps=msd_real_fmaps,
-            msd_fake_fmaps=msd_fake_fmaps,
-            mpd_fake_fmaps=mpd_fake_fmaps,
-            model=self.model,
-            optimizer_idx=1
-        )
-
-        if self.is_train:
-            losses["loss_d"].backward()
-            self._clip_grad_norm_d()
-            self.optimizer_d.step()
-
-        return losses
-
-    def _clip_grad_norm_g(self):
-        if self.config["trainer"].get("max_grad_norm_g", None) is not None:
-            clip_grad_norm_(
-                self.model.generator.parameters(),
-                self.config["trainer"]["max_grad_norm_g"]
-            )
-
-    def _clip_grad_norm_d(self):
-        if self.config["trainer"].get("max_grad_norm_d", None) is not None:
-            d_params = []
-            d_params.extend(self.model.mpd.parameters())
-            d_params.extend(self.model.msd.parameters())
-
-            clip_grad_norm_(
-                d_params,
-                self.config["trainer"]["max_grad_norm_d"]
-            )
-
-    @torch.no_grad()
-    def _get_grad_norm(self, norm_type=2):
-        g_parameters = [p for p in self.model.generator.parameters() if p.grad is not None]
-        g_norm = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), norm_type) for p in g_parameters]),
-            norm_type,
-        ).item() if g_parameters else 0.0
-
-        d_parameters = []
-        d_parameters.extend([p for p in self.model.mpd.parameters() if p.grad is not None])
-        d_parameters.extend([p for p in self.model.msd.parameters() if p.grad is not None])
-        d_norm = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), norm_type) for p in d_parameters]),
-            norm_type,
-        ).item() if d_parameters else 0.0
-
-        return g_norm + d_norm
-
-    def _log_batch(self, batch_idx, batch, mode="train"):
-        pass
-
+    
     def _save_checkpoint(self, epoch, save_best=False, only_best=False):
         arch = type(self.model).__name__
         state = {
@@ -401,14 +340,14 @@ class HiFiGANTrainer(BaseTrainer):
 
         if checkpoint["config"]["model"] != self.config["model"]:
             self.logger.warning(
-                "Warning: Architecture configuration given in config file is different from checkpoint."
+                "Warning: Architecture configuration different from checkpoint."
             )
         self.model.load_state_dict(checkpoint["state_dict"])
 
         if (checkpoint["config"]["optimizer_g"] != self.config["optimizer_g"] or
                 checkpoint["config"]["optimizer_d"] != self.config["optimizer_d"]):
             self.logger.warning(
-                "Warning: Optimizer configuration different from checkpoint. Not resuming optimizers."
+                "Warning: Optimizer configuration different. Not resuming optimizers."
             )
         else:
             self.optimizer_g.load_state_dict(checkpoint["optimizer_g"])

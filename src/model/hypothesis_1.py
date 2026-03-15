@@ -84,58 +84,11 @@ class ResBlock(nn.Module):
             remove_weight_norm(c)
 
 
-class ISTFTNetModule(nn.Module):
-    def __init__(self, n_fft=16, hop_length=4):
-        super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.register_buffer("window", torch.hann_window(n_fft))
-
-    def forward(self, magnitude):
-        zero_phase = torch.zeros_like(magnitude)
-        complex_spec_init = magnitude * torch.exp(1j * zero_phase)
-
-        waveform_intermediate = torch.istft(
-            complex_spec_init,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            win_length=self.n_fft,
-            window=self.window,
-        )
-
-        stft_out = torch.stft(
-            waveform_intermediate,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            win_length=self.n_fft,
-            window=self.window,
-            return_complex=True,
-        )
-
-        extracted_phase = torch.angle(stft_out)
-
-        T = min(magnitude.shape[-1], extracted_phase.shape[-1])
-        magnitude = magnitude[..., :T]
-        extracted_phase = extracted_phase[..., :T]
-
-        complex_spec_final = magnitude * torch.exp(1j * extracted_phase)
-
-        waveform = torch.istft(
-            complex_spec_final,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            win_length=self.n_fft,
-            window=self.window,
-        )
-
-        return waveform
-    
-
 class FreeVGeneratorH1(nn.Module):
     def __init__(
         self, sr=22050, n_fft=1024, hop_length=256, win_length=1024,
         n_mels=80, fmin=0.0, fmax=8000.0, upsample_initial_channel=512,
-        upsample_rates=(8, 8), upsample_kernel_sizes=(16, 16),
+        upsample_rates=(8, 8, 2, 2), upsample_kernel_sizes=(16, 16, 4, 4),
         resblock_kernel_sizes=(3, 7, 11),
         resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
         istft_n_fft=16, istft_hop_length=4,
@@ -167,7 +120,9 @@ class FreeVGeneratorH1(nn.Module):
         ch = upsample_initial_channel
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(
-                weight_norm(nn.ConvTranspose1d(ch, ch // 2, k, stride=u, padding=(k - u) // 2))
+                weight_norm(nn.ConvTranspose1d(
+                    ch, ch // 2, k, stride=u, padding=(k - u) // 2
+                ))
             )
             ch = ch // 2
 
@@ -177,16 +132,25 @@ class FreeVGeneratorH1(nn.Module):
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes):
                 self.resblocks.append(ResBlock(ch_cur, k, d))
 
-        post_channels = ch_cur
+        post_channels = upsample_initial_channel // (2 ** len(upsample_rates))
         istft_freq_bins = istft_n_fft // 2 + 1
 
         self.mag_conv = weight_norm(
-            nn.Conv1d(post_channels, istft_freq_bins, 7, padding=3)
+            nn.Conv1d(
+                post_channels, 
+                istft_freq_bins, 
+                kernel_size=istft_n_fft, 
+                stride=istft_hop_length, 
+                padding=istft_n_fft // 2
+            )
         )
 
-        self.istft_module = ISTFTNetModule(
-            n_fft=istft_n_fft, hop_length=istft_hop_length
+
+        self.waveform_conv = weight_norm(
+            nn.Conv1d(post_channels, 1, 7, padding=3)
         )
+
+        self.register_buffer("istft_window", torch.hann_window(istft_n_fft))
 
     def forward(self, mel):
         magnitude = self.pimf(mel)
@@ -196,7 +160,7 @@ class FreeVGeneratorH1(nn.Module):
         mag = mag[..., :T]
         phase = phase[..., :T]
 
-        x = torch.cat([mag, phase], dim=1)
+        x = torch.cat([mag, phase], dim=1) 
         x = self.conv_pre(x)
 
         for i in range(self.num_upsamples):
@@ -212,9 +176,37 @@ class FreeVGeneratorH1(nn.Module):
 
         x = F.leaky_relu(x)
 
-        pred_mag = torch.exp(self.mag_conv(x))
+        pred_mag = torch.exp(torch.clamp(self.mag_conv(x), max=10.0))
 
-        audio = self.istft_module(pred_mag)
+        intermediate_waveform = self.waveform_conv(x).squeeze(1)
+
+        stft_out = torch.stft(
+            intermediate_waveform,
+            n_fft=self.istft_n_fft,
+            hop_length=self.istft_hop_length,
+            win_length=self.istft_n_fft,
+            window=self.istft_window,
+            return_complex=True,
+            center=True
+        )
+
+        stft_mag = stft_out.abs().clamp(min=1e-7)
+        unit_phase = stft_out / stft_mag
+
+        T_min = min(pred_mag.shape[-1], unit_phase.shape[-1])
+        pred_mag = pred_mag[..., :T_min]
+        unit_phase = unit_phase[..., :T_min]
+
+        complex_spec = pred_mag * unit_phase
+
+        audio = torch.istft(
+            complex_spec,
+            n_fft=self.istft_n_fft,
+            hop_length=self.istft_hop_length,
+            win_length=self.istft_n_fft,
+            window=self.istft_window,
+            center=True
+        )
 
         audio = audio.unsqueeze(1)
         audio = torch.clamp(audio, -1.0, 1.0)
@@ -227,6 +219,7 @@ class FreeVGeneratorH1(nn.Module):
             block.remove_weight_norm()
         remove_weight_norm(self.conv_pre)
         remove_weight_norm(self.mag_conv)
+        remove_weight_norm(self.waveform_conv)
 
 
 class FreeVH1(nn.Module):
@@ -248,8 +241,12 @@ class FreeVH1(nn.Module):
         audio_generated = self.generator(mel)
 
         if audio_real is not None:
-            mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.mpd(audio_real, audio_generated)
-            mrd_real, mrd_fake, mrd_real_fmaps, mrd_fake_fmaps = self.mrd(audio_real, audio_generated)
+            mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.mpd(
+                audio_real, audio_generated
+            )
+            mrd_real, mrd_fake, mrd_real_fmaps, mrd_fake_fmaps = self.mrd(
+                audio_real, audio_generated
+            )
 
             return {
                 'audio_generated': audio_generated,

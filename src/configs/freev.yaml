@@ -33,10 +33,11 @@ lr_scheduler_d:
   gamma: 0.999
 
 loss_function:
-  _target_: src.loss.HiFiGANLoss
-  lambda_adv: 1.0
-  lambda_fm: 2.0
-  lambda_mel: 45.0
+  _target_: src.loss.FreeVLoss
+  lambda_A: 45.0
+  lambda_P: 100.0
+  lambda_S: 45.0
+  lambda_W: 1.0
 
 trainer:
   _target_: src.trainer.HiFiGANTrainer

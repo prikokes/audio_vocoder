@@ -20,7 +20,7 @@ def main(config):
     evaluate the model.
 
     Args:
-        config (DictConfig): hydra experiment config.
+        config (DictConfig): hydra experiment config
     """
     set_random_seed(config.trainer.seed)
 

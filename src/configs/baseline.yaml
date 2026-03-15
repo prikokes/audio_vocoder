@@ -3,11 +3,11 @@ defaults:
   - model: hypothesis_1
   - writer: cometml
   - metrics: hifigan_metrics
-  - datasets: ljspeech
-  - dataloader: hifigan_dataloader
+  - datasets: ljspeech_one_batch
+  - dataloader: one_batch_dataloader
   - _self_
 
-run_name: "FreeV-H1-indirect-phase"
+run_name: "H1-one-batch"
 
 writer:
   run_name: ${run_name}
@@ -33,16 +33,17 @@ lr_scheduler_d:
   gamma: 0.999
 
 loss_function:
-  _target_: src.loss.HiFiGANLoss
-  lambda_adv: 1.0
-  lambda_fm: 2.0
-  lambda_mel: 45.0
+  _target_: src.loss.FreeVLoss
+  lambda_A: 45.0
+  lambda_P: 10.0
+  lambda_S: 45.0
+  lambda_W: 1.0
 
 trainer:
   _target_: src.trainer.HiFiGANTrainer
   log_step: 100
-  n_epochs: 400
-  epoch_len: 205
+  n_epochs: 10000
+  epoch_len: 1
   device_tensors: ["mel", "audio"]
   resume_from: null
   device: cuda
@@ -50,9 +51,9 @@ trainer:
   monitor: "min val_MelDistance"
   save_period: 50
   early_stop: 200
-  save_dir: "saved_freev_h1"
+  save_dir: "saved_freev"
   seed: 1
-  d_steps: 1
+  d_steps: 2
   g_steps: 1
   max_grad_norm_g: 1.0
   max_grad_norm_d: 1.0

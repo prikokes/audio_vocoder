@@ -1,20 +1,19 @@
-torch==2.10.0
-torchvision==0.25.0
-torchaudio==2.10.0
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
 torchmetrics==1.8.2
-numpy==2.3.0
-scipy==1.17.0
+numpy==2.2.6
+scipy==1.15.3
 tqdm
 matplotlib
 pandas==2.3.3
-wandb
+# wandb
 comet_ml
 hydra-core
 soundfile
 black
 isort
-pre-commit
+# pre-commit
 pystoi
 pesq
 librosa
-

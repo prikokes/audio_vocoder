@@ -5,7 +5,7 @@ import numpy as np
 from torch.nn.utils import weight_norm, remove_weight_norm
 from librosa.filters import mel as librosa_mel_fn
 
-from src.model import MultiPeriodDiscriminator, MultiResolutionDiscriminator
+from src.model.discriminators import MultiPeriodDiscriminator, MultiResolutionDiscriminator
 
 
 LRELU_SLOPE = 0.1

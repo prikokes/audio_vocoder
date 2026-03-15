@@ -2,7 +2,7 @@ train:
   _target_: src.datasets.lj_speech_dataset.LJSpeechDataset
   root_dir: "/home/gyaivanov_1/audio_vocoder/data/LJSpeech-1.1"
   metadata_file: "metadata.csv"
-  segment_size: 8192
+  segment_size: 16384
   limit: 12000
   offset: 0
   shuffle_index: true
