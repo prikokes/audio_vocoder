@@ -10,57 +10,51 @@ class CometMLWriter:
 
     See https://www.comet.com/docs/v2/.
     """
-
     def __init__(
-        self,
-        logger,
-        project_config,
-        project_name,
-        workspace=None,
-        run_id=None,
-        run_name=None,
-        mode="online",
-        **kwargs,
-    ):
-        """
-        API key is expected to be provided by the user in the terminal.
+    self,
+    logger,
+    project_config,
+    project_name,
+    workspace=None,
+    run_id=None,
+    run_name=None,
+    mode="online",
+    offline_directory="./comet_logs",
+    **kwargs,
+):
+    try:
+        import comet_ml
 
-        Args:
-            logger (Logger): logger that logs output.
-            project_config (dict): config for the current experiment.
-            project_name (str): name of the project inside experiment tracker.
-            workspace (str | None): name of the workspace inside experiment
-                tracker. Used if you work in a team.
-            run_id (str | None): the id of the current run.
-            run_name (str | None): the name of the run. If None, random name
-                is given.
-            mode (str): if online, log data to the remote server. If
-                offline, log locally.
-        """
-        try:
-            import comet_ml
-
+        if mode != "offline":
             comet_ml.login()
 
-            self.run_id = run_id
+        self.run_id = run_id
 
-            resume = False
-            if project_config["trainer"].get("resume_from") is not None:
-                resume = True
+        resume = False
+        if project_config["trainer"].get("resume_from") is not None:
+            resume = True
 
-            if resume:
-                if mode == "offline":
-                    exp_class = comet_ml.ExistingOfflineExperiment
-                else:
-                    exp_class = comet_ml.ExistingExperiment
-
-                self.exp = exp_class(experiment_key=self.run_id)
+        if resume:
+            if mode == "offline":
+                exp_class = comet_ml.ExistingOfflineExperiment
             else:
-                if mode == "offline":
-                    exp_class = comet_ml.OfflineExperiment
-                else:
-                    exp_class = comet_ml.Experiment
+                exp_class = comet_ml.ExistingExperiment
 
+            self.exp = exp_class(experiment_key=self.run_id)
+        else:
+            if mode == "offline":
+                exp_class = comet_ml.OfflineExperiment
+                self.exp = exp_class(
+                    project_name=project_name,
+                    workspace=workspace,
+                    offline_directory=offline_directory,
+                    log_code=kwargs.get("log_code", False),
+                    log_graph=kwargs.get("log_graph", False),
+                    auto_metric_logging=kwargs.get("auto_metric_logging", False),
+                    auto_param_logging=kwargs.get("auto_param_logging", False),
+                )
+            else:
+                exp_class = comet_ml.Experiment
                 self.exp = exp_class(
                     project_name=project_name,
                     workspace=workspace,
@@ -70,19 +64,14 @@ class CometMLWriter:
                     auto_metric_logging=kwargs.get("auto_metric_logging", False),
                     auto_param_logging=kwargs.get("auto_param_logging", False),
                 )
-                self.exp.set_name(run_name)
-                self.exp.log_parameters(parameters=project_config)
 
-            self.comel_ml = comet_ml
+            self.exp.set_name(run_name)
+            self.exp.log_parameters(parameters=project_config)
 
-        except ImportError:
-            logger.warning("For use comet_ml install it via \n\t pip install comet_ml")
+        self.comel_ml = comet_ml
 
-        self.step = 0
-        # the mode is usually equal to the current partition name
-        # used to separate Partition1 and Partition2 metrics
-        self.mode = ""
-        self.timer = datetime.now()
+    except ImportError:
+        logger.warning("For use comet_ml install it via \n\t pip install comet_ml")
 
     def set_step(self, step, mode="train"):
         """

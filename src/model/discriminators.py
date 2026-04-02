@@ -52,6 +52,7 @@ class DiscriminatorR(nn.Module):
         spec = torch.stft(
             x, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
             window=self.window, return_complex=True,
+            center=False
         )
         spec = torch.stack([spec.real, spec.imag], dim=1)
         return spec
