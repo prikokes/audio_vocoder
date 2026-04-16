@@ -3,7 +3,7 @@ train:
   root_dir: "/home/gyaivanov_1/audio_vocoder/data/LJSpeech-1.1"
   metadata_file: "metadata.csv"
   segment_size: 16384
-  limit: 16
+  limit: 1
   offset: 0
   shuffle_index: false
   instance_transforms:
@@ -22,7 +22,7 @@ val:
   root_dir: "/home/gyaivanov_1/audio_vocoder/data/LJSpeech-1.1"
   metadata_file: "metadata.csv"
   segment_size: 16384
-  limit: 16
+  limit: 1
   offset: 0
   shuffle_index: false
   instance_transforms: ${transforms.instance_transforms.inference}
@@ -33,7 +33,7 @@ test:
   root_dir: "/home/gyaivanov_1/audio_vocoder/data/LJSpeech-1.1"
   metadata_file: "metadata.csv"
   segment_size: 16384
-  limit: 16
+  limit: 1
   offset: 0
   shuffle_index: false
   instance_transforms: ${transforms.instance_transforms.inference}

@@ -3,11 +3,11 @@ defaults:
   - model: hypothesis_1
   - writer: cometml
   - metrics: hifigan_metrics
-  - datasets: ljspeech_one_batch
-  - dataloader: one_batch_dataloader
+  - datasets: ljspeech
+  - dataloader: hifigan_dataloader
   - _self_
 
-run_name: "H1-one-batch"
+run_name: "H1-full-data"
 
 writer:
   run_name: ${run_name}

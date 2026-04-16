@@ -2,13 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from torch.nn.utils import weight_norm, remove_weight_norm
 from librosa.filters import mel as librosa_mel_fn
 
 from src.model.discriminators import MultiPeriodDiscriminator, MultiResolutionDiscriminator
 
 
 LRELU_SLOPE = 0.1
+
+
+def get_padding(kernel_size, dilation=1):
+    return int((kernel_size * dilation - dilation) / 2)
 
 
 class PseudoInverseMelFilter(nn.Module):
@@ -18,165 +21,179 @@ class PseudoInverseMelFilter(nn.Module):
         mel_basis_pinv = np.linalg.pinv(mel_basis)
         self.register_buffer("mel_basis_pinv", torch.FloatTensor(mel_basis_pinv))
 
-    def forward(self, mel):
-        mel_linear = torch.exp(mel)
+    def forward(self, log_mel):
+        mel_linear = torch.exp(log_mel)
         magnitude = torch.matmul(self.mel_basis_pinv, mel_linear)
-        magnitude = torch.clamp(magnitude, min=1e-7)
+        magnitude = torch.clamp(magnitude, min=1e-5)
         return magnitude
 
 
-class InitialSignalReconstruction(nn.Module):
-    def __init__(self, n_fft=1024, hop_length=256, win_length=1024):
+class GRN(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.win_length = win_length
-        self.register_buffer("window", torch.hann_window(win_length))
-
-    def forward(self, magnitude):
-        random_phase = 2 * np.pi * torch.rand_like(magnitude) - np.pi
-        complex_spec = magnitude * torch.exp(1j * random_phase)
-
-        waveform = torch.istft(
-            complex_spec, n_fft=self.n_fft, hop_length=self.hop_length,
-            win_length=self.win_length, window=self.window,
-        )
-
-        stft_out = torch.stft(
-            waveform, n_fft=self.n_fft, hop_length=self.hop_length,
-            win_length=self.win_length, window=self.window, return_complex=True,
-        )
-
-        mag = stft_out.abs()
-        phase = torch.angle(stft_out)
-        return mag, phase
-
-
-class ResBlock(nn.Module):
-    def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
-        super().__init__()
-        self.convs1 = nn.ModuleList()
-        self.convs2 = nn.ModuleList()
-
-        for d in dilation:
-            self.convs1.append(
-                weight_norm(nn.Conv1d(channels, channels, kernel_size,
-                    dilation=d, padding=(kernel_size * d - d) // 2))
-            )
-            self.convs2.append(
-                weight_norm(nn.Conv1d(channels, channels, kernel_size,
-                    dilation=1, padding=(kernel_size - 1) // 2))
-            )
+        self.gamma = nn.Parameter(torch.zeros(1, 1, dim))
+        self.beta = nn.Parameter(torch.zeros(1, 1, dim))
 
     def forward(self, x):
-        for c1, c2 in zip(self.convs1, self.convs2):
-            xt = F.leaky_relu(x, LRELU_SLOPE)
-            xt = c1(xt)
-            xt = F.leaky_relu(xt, LRELU_SLOPE)
-            xt = c2(xt)
-            x = xt + x
-        return x
+        Gx = torch.norm(x, p=2, dim=1, keepdim=True)
+        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
+        return self.gamma * (x * Nx) + self.beta + x
 
-    def remove_weight_norm(self):
-        for c in self.convs1:
-            remove_weight_norm(c)
-        for c in self.convs2:
-            remove_weight_norm(c)
+
+class ConvNeXtBlock(nn.Module):
+    def __init__(self, dim, intermediate_dim, layer_scale_init_value=None,
+                 adanorm_num_embeddings=None):
+        super().__init__()
+        self.dwconv = nn.Conv1d(dim, dim, kernel_size=7, padding=3, groups=dim)
+        self.adanorm = adanorm_num_embeddings is not None
+        self.norm = nn.LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, intermediate_dim)
+        self.act = nn.GELU()
+        self.grn = GRN(intermediate_dim)
+        self.pwconv2 = nn.Linear(intermediate_dim, dim)
+
+    def forward(self, x, cond_embedding_id=None):
+        residual = x
+        x = self.dwconv(x)
+        x = x.transpose(1, 2)
+        if self.adanorm:
+            assert cond_embedding_id is not None
+            x = self.norm(x, cond_embedding_id)
+        else:
+            x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.grn(x)
+        x = self.pwconv2(x)
+        x = x.transpose(1, 2)
+        x = residual + x
+        return x
 
 
 class FreeVGenerator(nn.Module):
     def __init__(
-        self, sr=22050, n_fft=1024, hop_length=256, win_length=1024,
-        n_mels=80, fmin=0.0, fmax=8000.0, upsample_initial_channel=512,
-        upsample_rates=(8, 8), upsample_kernel_sizes=(16, 16),
-        resblock_kernel_sizes=(3, 7, 11),
-        resblock_dilation_sizes=((1, 3, 5), (1, 3, 5), (1, 3, 5)),
-        istft_n_fft=16, istft_hop_length=4,
+        self,
+        sr=22050,
+        n_fft=1024,
+        hop_length=256,
+        win_length=1024,
+        n_mels=80,
+        fmin=0.0,
+        fmax=8000.0,
+        asp_channel=513,
+        asp_num_convnext_blocks=1,
+        psp_channel=512,
+        psp_input_conv_kernel_size=7,
+        psp_output_R_conv_kernel_size=7,
+        psp_output_I_conv_kernel_size=7,
+        psp_num_convnext_blocks=8,
+        intermediate_dim=1536,
+        num_layers_for_scale=8,
     ):
         super().__init__()
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.win_length = win_length
-        self.istft_n_fft = istft_n_fft
-        self.istft_hop_length = istft_hop_length
-        self.num_kernels = len(resblock_kernel_sizes)
-        self.num_upsamples = len(upsample_rates)
+        self.freq_bins = n_fft // 2 + 1  # 513 for n_fft=1024
 
-        self.pimf = PseudoInverseMelFilter(sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax)
-        self.isr = InitialSignalReconstruction(n_fft=n_fft, hop_length=hop_length, win_length=win_length)
-
-        spec_channels = n_fft // 2 + 1
-        input_channels = spec_channels * 2
-
-        self.conv_pre = weight_norm(nn.Conv1d(input_channels, upsample_initial_channel, 7, padding=3))
-
-        self.ups = nn.ModuleList()
-        ch = upsample_initial_channel
-        for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-            self.ups.append(
-                weight_norm(nn.ConvTranspose1d(ch, ch // 2, k, stride=u, padding=(k - u) // 2))
-            )
-            ch = ch // 2
-
-        self.resblocks = nn.ModuleList()
-        for i in range(len(self.ups)):
-            ch_cur = upsample_initial_channel // (2 ** (i + 1))
-            for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes):
-                self.resblocks.append(ResBlock(ch_cur, k, d))
-
-        post_channels = ch_cur
-        istft_freq_bins = istft_n_fft // 2 + 1
-
-        self.mag_conv = weight_norm(nn.Conv1d(post_channels, istft_freq_bins, 7, padding=3))
-        self.phase_conv = weight_norm(nn.Conv1d(post_channels, istft_freq_bins, 7, padding=3))
-        self.register_buffer("istft_window", torch.hann_window(istft_n_fft))
-
-    def forward(self, mel):
-        magnitude = self.pimf(mel)
-        mag, phase = self.isr(magnitude)
-
-        T = min(mag.shape[-1], mel.shape[-1])
-        mag = mag[..., :T]
-        phase = phase[..., :T]
-
-        x = torch.cat([mag, phase], dim=1)
-        x = self.conv_pre(x)
-
-        for i in range(self.num_upsamples):
-            x = F.leaky_relu(x, LRELU_SLOPE)
-            x = self.ups[i](x)
-            xs = None
-            for j in range(self.num_kernels):
-                if xs is None:
-                    xs = self.resblocks[i * self.num_kernels + j](x)
-                else:
-                    xs += self.resblocks[i * self.num_kernels + j](x)
-            x = xs / self.num_kernels
-
-        x = F.leaky_relu(x)
-
-        pred_mag = torch.exp(self.mag_conv(x))
-        pred_phase = self.phase_conv(x)
-
-        complex_spec = pred_mag * torch.exp(1j * pred_phase)
-
-        audio = torch.istft(
-            complex_spec, n_fft=self.istft_n_fft, hop_length=self.istft_hop_length,
-            win_length=self.istft_n_fft, window=self.istft_window,
+        self.pimf = PseudoInverseMelFilter(
+            sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax
         )
 
-        audio = audio.unsqueeze(1)
-        audio = torch.clamp(audio, -1.0, 1.0)
-        return audio
+        layer_scale_init_value = 1.0 / num_layers_for_scale
 
-    def remove_weight_norm(self):
-        for up in self.ups:
-            remove_weight_norm(up)
-        for block in self.resblocks:
-            block.remove_weight_norm()
-        remove_weight_norm(self.conv_pre)
-        remove_weight_norm(self.mag_conv)
-        remove_weight_norm(self.phase_conv)
+        self.asp_convnext = nn.ModuleList([
+            ConvNeXtBlock(
+                dim=asp_channel,
+                intermediate_dim=intermediate_dim,
+                layer_scale_init_value=layer_scale_init_value,
+            )
+            for _ in range(asp_num_convnext_blocks)
+        ])
+
+        self.psp_input_conv = nn.Conv1d(
+            n_mels,
+            psp_channel,
+            psp_input_conv_kernel_size,
+            stride=1,
+            padding=get_padding(psp_input_conv_kernel_size, 1),
+        )
+        self.psp_input_norm = nn.LayerNorm(psp_channel, eps=1e-6)
+
+        self.psp_convnext = nn.ModuleList([
+            ConvNeXtBlock(
+                dim=psp_channel,
+                intermediate_dim=intermediate_dim,
+                layer_scale_init_value=layer_scale_init_value,
+            )
+            for _ in range(psp_num_convnext_blocks)
+        ])
+
+        self.psp_output_norm = nn.LayerNorm(psp_channel, eps=1e-6)
+
+        self.psp_output_R_conv = nn.Conv1d(
+            psp_channel,
+            self.freq_bins,
+            psp_output_R_conv_kernel_size,
+            stride=1,
+            padding=get_padding(psp_output_R_conv_kernel_size, 1),
+        )
+        self.psp_output_I_conv = nn.Conv1d(
+            psp_channel,
+            self.freq_bins,
+            psp_output_I_conv_kernel_size,
+            stride=1,
+            padding=get_padding(psp_output_I_conv_kernel_size, 1),
+        )
+
+        self.register_buffer("window", torch.hann_window(win_length))
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv1d, nn.Linear)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, mel):
+        inv_amp = self.pimf(mel)  # (B, freq_bins, T)
+
+        logamp = inv_amp.log()  # (B, freq_bins, T)
+        for conv_block in self.asp_convnext:
+            logamp = conv_block(logamp, cond_embedding_id=None)
+
+        pha = self.psp_input_conv(mel)          # (B, psp_channel, T)
+        pha = self.psp_input_norm(pha.transpose(1, 2)).transpose(1, 2)
+
+        for conv_block in self.psp_convnext:
+            pha = conv_block(pha, cond_embedding_id=None)
+
+        pha = self.psp_output_norm(pha.transpose(1, 2)).transpose(1, 2)
+
+        R = self.psp_output_R_conv(pha)         # (B, freq_bins, T)
+        I = self.psp_output_I_conv(pha)         # (B, freq_bins, T)
+        phase = torch.atan2(I, R)               # (B, freq_bins, T)
+
+        rea = torch.exp(logamp) * torch.cos(phase)
+        imag = torch.exp(logamp) * torch.sin(phase)
+        spec = torch.complex(rea, imag)         # (B, freq_bins, T)
+
+        audio = torch.istft(
+            spec,
+            self.n_fft,
+            hop_length=self.hop_length,
+            win_length=self.win_length,
+            window=self.window,
+            center=True,
+        )
+
+        self.logamp = logamp
+        self.phase = phase
+        self.spec_real = rea
+        self.spec_imag = imag
+
+        return audio.unsqueeze(1)  
 
 
 class FreeV(nn.Module):
@@ -189,36 +206,51 @@ class FreeV(nn.Module):
 
     def forward(self, mel=None, audio_real=None, **kwargs):
         if mel is None:
-            if 'mel' in kwargs:
-                mel = kwargs['mel']
+            if "mel" in kwargs:
+                mel = kwargs["mel"]
             else:
                 raise ValueError("Mel spectrogram input is required")
 
         audio_generated = self.generator(mel)
 
-        if audio_real is not None:
-            mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.mpd(audio_real, audio_generated)
-            mrd_real, mrd_fake, mrd_real_fmaps, mrd_fake_fmaps = self.mrd(audio_real, audio_generated)
+        result = {
+            "audio_generated": audio_generated,
+            "logamp": self.generator.logamp,
+            "phase": self.generator.phase,
+            "spec_real": self.generator.spec_real,
+            "spec_imag": self.generator.spec_imag,
+        }
 
-            return {
-                'audio_generated': audio_generated,
-                'mpd_real': mpd_real,
-                'mpd_fake': mpd_fake,
-                'mrd_real': mrd_real,
-                'mrd_fake': mrd_fake,
-                'mpd_real_fmaps': mpd_real_fmaps,
-                'mpd_fake_fmaps': mpd_fake_fmaps,
-                'mrd_real_fmaps': mrd_real_fmaps,
-                'mrd_fake_fmaps': mrd_fake_fmaps,
-            }
-        else:
-            return {'audio_generated': audio_generated}
+        if audio_real is not None:
+            min_len = min(audio_real.shape[-1], audio_generated.shape[-1])
+            audio_real_t = audio_real[..., :min_len]
+            audio_gen_t = audio_generated[..., :min_len]
+
+            mpd_real, mpd_fake, mpd_real_fmaps, mpd_fake_fmaps = self.mpd(
+                audio_real_t, audio_gen_t
+            )
+            mrd_real, mrd_fake, mrd_real_fmaps, mrd_fake_fmaps = self.mrd(
+                audio_real_t, audio_gen_t
+            )
+
+            result.update({
+                "mpd_real": mpd_real,
+                "mpd_fake": mpd_fake,
+                "mrd_real": mrd_real,
+                "mrd_fake": mrd_fake,
+                "mpd_real_fmaps": mpd_real_fmaps,
+                "mpd_fake_fmaps": mpd_fake_fmaps,
+                "mrd_real_fmaps": mrd_real_fmaps,
+                "mrd_fake_fmaps": mrd_fake_fmaps,
+            })
+
+        return result
 
     def inference(self, mel):
-        return self.forward(mel=mel)
-
-    def remove_weight_norm(self):
-        self.generator.remove_weight_norm()
+        self.generator.eval()
+        with torch.no_grad():
+            audio = self.generator(mel)
+        return {"audio_generated": audio}
 
     @property
     def discriminator(self):

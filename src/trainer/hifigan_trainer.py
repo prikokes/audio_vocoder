@@ -67,11 +67,23 @@ class HiFiGANTrainer(BaseTrainer):
             disc_outputs[f"{disc_name}_fmap_real"] = fmap_real
             disc_outputs[f"{disc_name}_fmap_fake"] = fmap_fake
 
-        return {
+        result = {
             "audio_real": audio_real,
             "audio_fake": audio_fake,
             **disc_outputs,
         }
+
+        gen = self.model.generator
+        if hasattr(gen, "logamp"):
+            result["logamp"] = gen.logamp
+        if hasattr(gen, "phase"):
+            result["phase"] = gen.phase
+        if hasattr(gen, "spec_real"):
+            result["spec_real"] = gen.spec_real
+        if hasattr(gen, "spec_imag"):
+            result["spec_imag"] = gen.spec_imag
+
+        return result
 
     def _run_model_no_grad_gen(self, mel, audio_real):
         with torch.no_grad():
@@ -90,11 +102,23 @@ class HiFiGANTrainer(BaseTrainer):
             disc_outputs[f"{disc_name}_fmap_real"] = fmap_real
             disc_outputs[f"{disc_name}_fmap_fake"] = fmap_fake
 
-        return {
+        result = {
             "audio_real": audio_real,
             "audio_fake": audio_fake,
             **disc_outputs,
         }
+
+        gen = self.model.generator
+        if hasattr(gen, "logamp"):
+            result["logamp"] = gen.logamp
+        if hasattr(gen, "phase"):
+            result["phase"] = gen.phase
+        if hasattr(gen, "spec_real"):
+            result["spec_real"] = gen.spec_real
+        if hasattr(gen, "spec_imag"):
+            result["spec_imag"] = gen.spec_imag
+
+        return result
 
     def _train_generator(self, mel, audio_real):
         self.optimizer_g.zero_grad()
@@ -109,6 +133,7 @@ class HiFiGANTrainer(BaseTrainer):
 
         losses["audio_fake"] = model_output["audio_fake"].detach()
         return losses
+
 
     def _train_discriminator(self, mel, audio_real):
         self.optimizer_d.zero_grad()
