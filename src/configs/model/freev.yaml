@@ -1,4 +1,5 @@
 _target_: src.model.FreeV
+
 generator_params:
   sr: 22050
   n_fft: 1024
@@ -7,10 +8,19 @@ generator_params:
   n_mels: 80
   fmin: 0.0
   fmax: 8000.0
-  upsample_initial_channel: 512
-  upsample_rates: [8, 8]
-  upsample_kernel_sizes: [16, 16]
-  resblock_kernel_sizes: [3, 7, 11]
-  resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
-  istft_n_fft: 16
-  istft_hop_length: 4
+
+  asp_channel: 513
+  asp_num_convnext_blocks: 1
+
+  psp_channel: 512
+  psp_input_conv_kernel_size: 7
+  psp_output_R_conv_kernel_size: 7
+  psp_output_I_conv_kernel_size: 7
+  psp_num_convnext_blocks: 8
+
+  intermediate_dim: 1536
+  num_layers_for_scale: 8
+
+mpd_params: {}
+
+mrd_params: {}

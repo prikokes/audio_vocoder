@@ -34,16 +34,25 @@ lr_scheduler_d:
 
 loss_function:
   _target_: src.loss.FreeVLoss
-  lambda_A: 45.0
-  lambda_P: 100.0
-  lambda_S: 45.0
-  lambda_W: 1.0
+  lambda_amplitude: 45.0
+  lambda_phase: 100.0
+  lambda_consistency: 1.0
+  lambda_mel: 45.0
+  lambda_adv: 1.0
+  lambda_fm: 2.0
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  n_mels: 80
+  sample_rate: 22050
+  f_min: 0.0
+  f_max: 8000.0
 
 trainer:
   _target_: src.trainer.HiFiGANTrainer
   log_step: 100
-  n_epochs: 400
-  epoch_len: 205
+  n_epochs: 10000
+  epoch_len: 1
   device_tensors: ["mel", "audio"]
   resume_from: null
   device: cuda

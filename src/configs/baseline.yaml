@@ -1,13 +1,13 @@
 defaults:
   - transforms: hifigan_transforms
-  - model: hypothesis_1
+  - model: freev
   - writer: cometml
   - metrics: hifigan_metrics
   - datasets: ljspeech
   - dataloader: hifigan_dataloader
   - _self_
 
-run_name: "H1-full-data"
+run_name: "FreeV-full-data-3"
 
 writer:
   run_name: ${run_name}
@@ -34,16 +34,29 @@ lr_scheduler_d:
 
 loss_function:
   _target_: src.loss.HypothesisLoss
-  lambda_A: 45.0
-  lambda_P: 10.0
-  lambda_S: 0.0
-  lambda_W: 1.0
+  lambda_amplitude: 45.0
+  lambda_phase_ip: 100.0
+  lambda_phase_gd: 100.0
+  lambda_phase_ptd: 100.0
+  lambda_consistency: 20.0
+  lambda_real_imag: 45.0
+  lambda_mel: 45.0
+  lambda_adv: 1.0
+  lambda_fm: 1.0
+  mrd_weight: 0.1
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  n_mels: 80
+  sample_rate: 22050
+  f_min: 0.0
+  f_max: 8000.0
 
 trainer:
   _target_: src.trainer.HiFiGANTrainer
   log_step: 100
   n_epochs: 10000
-  epoch_len: 1
+  epoch_len: 750
   device_tensors: ["mel", "audio"]
   resume_from: null
   device: cuda
@@ -51,10 +64,10 @@ trainer:
   monitor: "min val_MelDistance"
   save_period: 50
   early_stop: 200
-  save_dir: "saved_freev"
+  save_dir: "saved_freev_h1"
   seed: 1
   d_steps: 1
   g_steps: 1
   max_grad_norm_g: 1.0
   max_grad_norm_d: 1.0
-  segment_size: 16384
+  segment_size: 8192

@@ -42,8 +42,26 @@ def main(config):
     model = instantiate(config.model).to(device)
     logger.info(model)
 
-    loss_function = instantiate(config.loss_function).to(device)
-    metrics = instantiate(config.metrics)
+    def count_params(m):
+        total = sum(p.numel() for p in m.parameters())
+        trainable = sum(p.numel() for p in m.parameters() if p.requires_grad)
+        return total, trainable
+
+    total, trainable = count_params(model)
+    logger.info(f"Total parameters:     {total:,}")
+    logger.info(f"Trainable parameters: {trainable:,}")
+    logger.info(f"Non-trainable:        {total - trainable:,}")
+
+    if hasattr(model, 'generator'):
+        g_total, g_train = count_params(model.generator)
+        logger.info(f"  Generator:          {g_total:,} (trainable: {g_train:,})")
+
+    if hasattr(model, 'discriminator'):
+        d_total, d_train = count_params(model.discriminator)
+        logger.info(f"  Discriminator:      {d_total:,} (trainable: {d_train:,})")
+
+        loss_function = instantiate(config.loss_function).to(device)
+        metrics = instantiate(config.metrics)
 
     if hasattr(config, 'optimizer_g') and hasattr(config, 'optimizer_d'):
         logger.info("Initializing separate optimizers for generator and discriminator")
