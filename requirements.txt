@@ -17,3 +17,7 @@ isort
 pystoi
 pesq
 librosa
+thop
+fastdtw
+pyworld
+pysptk

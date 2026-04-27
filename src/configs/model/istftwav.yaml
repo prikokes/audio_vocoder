@@ -1,4 +1,4 @@
-_target_: src.model.hypothesis_1.FreeVH1
+_target_: src.model.ISTFTWavGAN
 generator_params:
   sr: 22050
   n_fft: 1024

@@ -9,8 +9,11 @@ defaults:
 inferencer:
   device_tensors: ["mel", "audio"]
   device: cuda
-  save_path: "hifigan_inference"
+  save_path: "freev_inference"
   seed: 1
-  from_pretrained: "saved_hifigan/HiFiGAN-Full data/model_best.pth"
+  from_pretrained: "/home/gyaivanov_1/audio_vocoder/saved_hifigan/HiFiGANV2-full-data/model_best.pth"
   sample_rate: 22050
-  max_duration: 4.0
+  
+  run_evaluation: true
+  eval_samples_limit: 600
+  num_demos: 5

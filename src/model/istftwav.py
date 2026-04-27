@@ -5,6 +5,8 @@ import numpy as np
 from torch.nn.utils import weight_norm, remove_weight_norm
 from librosa.filters import mel as librosa_mel_fn
 
+import math
+
 from src.model.discriminators import MultiPeriodDiscriminator, MultiResolutionDiscriminator
 from src.model.freev import ConvNeXtBlock, PseudoInverseMelFilter
 
@@ -185,7 +187,7 @@ class ISTFTNet2(nn.Module):
         x = x[:, :, :self.sub_freq_bins, :]            # (B, 2, 65, 8T)
 
         sub_mag = torch.exp(x[:, 0, :, :])             # (B, 65, 8T)
-        sub_phase = x[:, 1, :, :]                      # (B, 65, 8T)
+        sub_phase = torch.tanh(x[:, 1, :, :]) * math.pi
 
         sub_spec = sub_mag * torch.exp(1j * sub_phase)  # (B, 65, 8T)
 
@@ -221,7 +223,7 @@ class ISTFTNet2(nn.Module):
             block.remove_weight_norm()
 
 
-class FreeVGeneratorH1(nn.Module):
+class ISTFTWav(nn.Module):
     def __init__(
         self,
         sr=22050,
@@ -321,10 +323,10 @@ class FreeVGeneratorH1(nn.Module):
         self.phase_estimator.remove_weight_norm()
 
 
-class FreeVH1(nn.Module):
+class ISTFTWavGAN(nn.Module):
     def __init__(self, generator_params, mpd_params=None, mrd_params=None):
         super().__init__()
-        self.generator = FreeVGeneratorH1(**generator_params)
+        self.generator = ISTFTWav(**generator_params)
         self.mpd = MultiPeriodDiscriminator(**(mpd_params or {}))
         self.mrd = MultiResolutionDiscriminator(**(mrd_params or {}))
         self.discriminators = nn.ModuleList([self.mpd, self.mrd])

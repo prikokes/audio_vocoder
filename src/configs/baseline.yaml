@@ -1,13 +1,13 @@
 defaults:
   - transforms: hifigan_transforms
-  - model: freev
+  - model: istftwav
   - writer: cometml
   - metrics: hifigan_metrics
   - datasets: ljspeech
   - dataloader: hifigan_dataloader
   - _self_
 
-run_name: "FreeV-full-data-3"
+run_name: "ISTFTWav-full-data-2"
 
 writer:
   run_name: ${run_name}
@@ -39,11 +39,11 @@ loss_function:
   lambda_phase_gd: 100.0
   lambda_phase_ptd: 100.0
   lambda_consistency: 20.0
-  lambda_real_imag: 45.0
+  lambda_real_imag: 0.0
   lambda_mel: 45.0
   lambda_adv: 1.0
-  lambda_fm: 1.0
-  mrd_weight: 0.1
+  lambda_fm: 2.0
+  mrd_weight: 1.0
   n_fft: 1024
   hop_length: 256
   win_length: 1024
@@ -64,7 +64,7 @@ trainer:
   monitor: "min val_MelDistance"
   save_period: 50
   early_stop: 200
-  save_dir: "saved_freev_h1"
+  save_dir: "saved_freev_baseline"
   seed: 1
   d_steps: 1
   g_steps: 1

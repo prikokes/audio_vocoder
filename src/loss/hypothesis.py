@@ -16,11 +16,11 @@ class HypothesisLoss(nn.Module):
         lambda_phase_gd=100.0,
         lambda_phase_ptd=100.0,
         lambda_consistency=20.0,
-        lambda_real_imag=45.0,
+        lambda_real_imag=0.0,
         lambda_mel=45.0,
         lambda_adv=1.0,
         lambda_fm=1.0, 
-        mrd_weight=0.1,
+        mrd_weight=1.0,
         n_fft=1024,
         hop_length=256,
         win_length=1024,
@@ -170,8 +170,6 @@ class HypothesisLoss(nn.Module):
         losses["loss_phase_gd"] = loss_gd
         losses["loss_phase_ptd"] = loss_ptd
 
-        # ===== STFT Consistency loss (L_C) =====
-        # Recompute spectral from generated audio for consistency
         _, _, rea_from_audio, imag_from_audio = self._compute_gt_spectral(audio_fake)
         rea_from_audio = rea_from_audio[..., :T]
         imag_from_audio = imag_from_audio[..., :T]
@@ -181,7 +179,6 @@ class HypothesisLoss(nn.Module):
         )
         losses["loss_consistency"] = loss_consistency
 
-        # ===== Real/Imaginary L1 loss (L_R + L_I) =====
         loss_real = F.l1_loss(rea_fake, rea_real)
         loss_imag = F.l1_loss(imag_fake, imag_real)
         losses["loss_real"] = loss_real
@@ -195,12 +192,16 @@ class HypothesisLoss(nn.Module):
         loss_adv = 0.0
         for name in disc_names:
             w = self._get_disc_weight(name)
-            disc_loss = 0.0
+            
+            adv_loss_part = 0.0  
+            
             for d_fake in model_output[f"{name}_fake"]:
-                disc_loss += torch.mean(torch.clamp(1.0 - d_fake, min=0))
-            loss_adv += w * disc_loss
+                adv_loss_part += torch.mean(torch.clamp(1.0 - d_fake, min=0.0))
+                
+            loss_adv += w * adv_loss_part
+            
         losses["loss_adv"] = loss_adv
-
+        
         loss_fm = 0.0
         for name in disc_names:
             w = self._get_disc_weight(name)
@@ -223,13 +224,13 @@ class HypothesisLoss(nn.Module):
         losses["loss_fm"] = loss_fm
 
         losses["loss_g"] = (
-            self.lambda_amplitude * loss_amplitude          # 45 * L_A
-            + loss_phase                                     # 100*ip + 100*gd + 100*ptd
-            + self.lambda_consistency * loss_consistency      # 20 * L_C
-            + self.lambda_real_imag * (loss_real + loss_imag) # 45 * (L_R + L_I)
-            + self.lambda_mel * loss_mel                     # 45 * L_mel
-            + self.lambda_adv * loss_adv                     # 1 * L_adv (MPD*1 + MRD*0.1)
-            + self.lambda_fm * loss_fm                       # 1 * L_fm  (MPD*1 + MRD*0.1)
+            self.lambda_amplitude * loss_amplitude
+            + loss_phase                                     
+            + self.lambda_consistency * loss_consistency      
+            + self.lambda_real_imag * (loss_real + loss_imag)
+            + self.lambda_mel * loss_mel                     
+            + self.lambda_adv * loss_adv                     
+            + self.lambda_fm * loss_fm                       
         )
 
         return losses
@@ -245,8 +246,8 @@ class HypothesisLoss(nn.Module):
             for d_real, d_fake in zip(
                 model_output[f"{name}_real"], model_output[f"{name}_fake"]
             ):
-                disc_loss += torch.mean(torch.clamp(1.0 - d_real, min=0))
-                disc_loss += torch.mean(torch.clamp(1.0 + d_fake.detach(), min=0))
+                disc_loss += torch.mean(torch.clamp(1.0 - d_real, min=0.0))
+                disc_loss += torch.mean(torch.clamp(1.0 + d_fake.detach(), min=0.0))
             loss_d += w * disc_loss
         losses["loss_d"] = loss_d
 

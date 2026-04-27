@@ -12,95 +12,93 @@ def get_padding(kernel_size, dilation=1):
 
 
 class DiscriminatorR(nn.Module):
-    def __init__(self, resolution, channels=32, max_channels=512):
+    def __init__(
+        self,
+        resolution,
+        channels: int = 64,
+        in_channels: int = 1,
+        num_embeddings: int = None,
+        lrelu_slope: float = 0.1,
+    ):
         super().__init__()
         self.resolution = resolution
-        n_fft, hop_length, win_length = resolution
-        self.register_buffer("window", torch.hann_window(win_length))
+        self.in_channels = in_channels
+        self.lrelu_slope = lrelu_slope
+        self.convs = nn.ModuleList([
+            weight_norm(nn.Conv2d(in_channels, channels, kernel_size=(7, 5), stride=(2, 2), padding=(3, 2))),
+            weight_norm(nn.Conv2d(channels, channels, kernel_size=(5, 3), stride=(2, 1), padding=(2, 1))),
+            weight_norm(nn.Conv2d(channels, channels, kernel_size=(5, 3), stride=(2, 2), padding=(2, 1))),
+            weight_norm(nn.Conv2d(channels, channels, kernel_size=3, stride=(2, 1), padding=1)),
+            weight_norm(nn.Conv2d(channels, channels, kernel_size=3, stride=(2, 2), padding=1)),
+        ])
+        
+        if num_embeddings is not None:
+            self.emb = torch.nn.Embedding(num_embeddings=num_embeddings, embedding_dim=channels)
+            torch.nn.init.zeros_(self.emb.weight)
+            
+        self.conv_post = weight_norm(nn.Conv2d(channels, 1, (3, 3), padding=(1, 1)))
 
-        spec_channels = 2
-
-        self.convs = nn.ModuleList()
-
-        self.convs.append(
-            weight_norm(nn.Conv2d(spec_channels, channels, kernel_size=(3, 9), padding=(1, 4)))
-        )
-
-        ch_in = channels
-        for i in range(3):
-            ch_out = min(ch_in * 2, max_channels)
-            self.convs.append(
-                weight_norm(nn.Conv2d(ch_in, ch_out, kernel_size=(3, 9), stride=(1, 2), padding=(1, 4)))
-            )
-            ch_in = ch_out
-
-        ch_out = min(ch_in * 2, max_channels)
-        self.convs.append(
-            weight_norm(nn.Conv2d(ch_in, ch_out, kernel_size=(3, 3), padding=(1, 1)))
-        )
-        ch_in = ch_out
-
-        self.conv_post = weight_norm(nn.Conv2d(ch_in, 1, kernel_size=(3, 3), padding=(1, 1)))
-
-    def spectrogram(self, x):
+    def forward(self, x: torch.Tensor, cond_embedding_id: torch.Tensor = None):
+        fmap = []
         x = x.squeeze(1)
-        n_fft, hop_length, win_length = self.resolution
 
-        pad_amount = (n_fft - hop_length) // 2
-        x = F.pad(x, (pad_amount, pad_amount), mode='reflect')
-
-        spec = torch.stft(
-            x, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
-            window=self.window, return_complex=True,
-            center=False
-        )
-        spec = torch.stack([spec.real, spec.imag], dim=1)
-        return spec
-
-    def forward(self, x):
-        fmaps = []
         x = self.spectrogram(x)
-
-        for conv in self.convs:
-            x = conv(x)
-            x = F.leaky_relu(x, LRELU_SLOPE)
-            fmaps.append(x)
-
+        x = x.unsqueeze(1)
+        for l in self.convs:
+            x = l(x)
+            x = torch.nn.functional.leaky_relu(x, self.lrelu_slope)
+            fmap.append(x)
+            
+        if cond_embedding_id is not None:
+            emb = self.emb(cond_embedding_id)
+            h = (emb.view(1, -1, 1, 1) * x).sum(dim=1, keepdims=True)
+        else:
+            h = 0
+            
         x = self.conv_post(x)
-        fmaps.append(x)
+        fmap.append(x)
+        x += h
         x = torch.flatten(x, 1, -1)
 
-        return x, fmaps
+        return x, fmap
 
+    def spectrogram(self, x: torch.Tensor) -> torch.Tensor:
+        n_fft, hop_length, win_length = self.resolution
+        magnitude_spectrogram = torch.stft(
+            x,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=None,
+            center=True,
+            return_complex=True,
+        ).abs()
+
+        return magnitude_spectrogram
 
 class MultiResolutionDiscriminator(nn.Module):
-    def __init__(self, resolutions=None, channels=32, max_channels=512):
+    def __init__(
+        self,
+        resolutions=((1024, 256, 1024), (2048, 512, 2048), (512, 128, 512)),
+        num_embeddings: int = None,
+    ):
         super().__init__()
+        self.discriminators = nn.ModuleList(
+            [DiscriminatorR(resolution=r, num_embeddings=num_embeddings) for r in resolutions]
+        )
 
-        if resolutions is None:
-            resolutions = [
-                (1024, 120, 600),
-                (2048, 240, 1200),
-                (512, 50, 240),
-            ]
-
-        self.discriminators = nn.ModuleList([
-            DiscriminatorR(res, channels=channels, max_channels=max_channels)
-            for res in resolutions
-        ])
-
-    def forward(self, y, y_hat):
+    def forward(self, y: torch.Tensor, y_hat: torch.Tensor, bandwidth_id: torch.Tensor = None):
         y_d_rs = []
         y_d_gs = []
         fmap_rs = []
         fmap_gs = []
 
-        for disc in self.discriminators:
-            y_d_r, fmap_r = disc(y)
-            y_d_g, fmap_g = disc(y_hat)
+        for d in self.discriminators:
+            y_d_r, fmap_r = d(x=y, cond_embedding_id=bandwidth_id)
+            y_d_g, fmap_g = d(x=y_hat, cond_embedding_id=bandwidth_id)
             y_d_rs.append(y_d_r)
-            y_d_gs.append(y_d_g)
             fmap_rs.append(fmap_r)
+            y_d_gs.append(y_d_g)
             fmap_gs.append(fmap_g)
 
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
